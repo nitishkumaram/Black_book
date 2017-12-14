@@ -6,10 +6,13 @@ class MyThread1 extends Thread{
 	boolean stop= false;
 	public void run(){
 		
-		for (int i=1; i<100;i++){
+		for (int i=1; i<10000;i++){
 			System.out.println(i);
-			if(stop)
-				return;			//come out of run			
+			if(i == 999){			//Added if condition myself to turn stop to true
+				stop = true;
+			}
+			if(stop == true)
+				return;			//come out of run		
 		}
 			
 	}
