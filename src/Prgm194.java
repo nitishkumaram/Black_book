@@ -44,7 +44,6 @@ class CancelTicket extends Thread{
 		synchronized(comp){
 			
 			System.out.println("Cancel Ticket locked on compartment");
-		}
 		try{
 			Thread.sleep(200);
 			}catch(InterruptedException ie){}
@@ -55,7 +54,7 @@ class CancelTicket extends Thread{
 			}
 		}
 	}
-
+}
 class Prgm194 {
 	public static void main(String args[])throws Exception{
 		
