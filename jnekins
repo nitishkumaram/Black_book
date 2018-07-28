@@ -1,0 +1,313 @@
+pipeline {
+    agent any
+}
+
+// Defining pollSCM
+triggers {
+    pollSCM('H/15 * * * *')
+}
+
+// Persist artifacts and console output for the specific number of recent Pipeline run
+options {
+    buildDiscarder(logRotator(daysToKeepStr: '90', numToKeepStr: '60', artifactDaysToKeepStr: '', artifactNumToKeepStr: ''))
+}
+
+// Defining environment directive which specifies a sequence of key-value pairs which will be defined as environment variables for all the steps
+
+environment {
+    agentlabel = 'Windows1'
+    mvnversion = 'Maven 3.3.3'
+    jdkversion = 'JDK 1.8.0_60_Windows'
+    pomfilepath = 'applicationName/pom.xml'
+    mavengoalsandoptions = 'clean compile install'
+    mavenopts = '-Dmaven.test.failure.ignore=false'
+    mavensettings = '-s D:\\NexusMavenSettings\\settings_corpsys_prod.xml'
+    mavenglobalsettings = '-gs D:\\NexusMavenSettings\\settings_corpsys_prod.xml'
+    jacocogoals = '-X –Djacoco.destFile=coverage/jacoco.exec clean org.jacoco:jacoco-maven-plugin:prepare-agent install'
+
+    // get the dev and st parameter in useriput.json file
+
+    deploy_to_dev = 'disable'
+    deploy_to_st = 'disable'
+    deploy_to_int = 'enable'
+    deploy_to_uat = 'enable'
+    deploy_to_mo = 'enable'
+
+    resumeintdeployment = 'false'
+
+    // svn links
+    svncredentialId = 'hexadecimal from the user section of Jenkins'
+    svncheckoutURL1 = 'application svn URL'
+    svncheckoutURL2 = 'Application Healthcheck URL'
+    svncheckoutURL3 = 'Test Suites URL' //// e.g. 'http://scm.prodlb.something.net/corporatesyatems/strategic/trunk/CraftPOC'
+    svncheckoutURL4 = 'ucdclient URL' // e.g. 'http://scm.prodlb.something.net/corporatesyatems/strategic/trunk/Tools/udclient'
+    junitreportpath = 'applicationName/target/surefire-reports'
+    sonarprojectsettings = 'application_name/sonar-project.properties'
+
+    // Define Email notification 
+    notification_recipient = 'xyz@example.com'
+
+    // change ticket date format
+    Change_startDate = '07/30/2018 08:00 PM'
+    Change_endDate = '08/01/2018 08:00 PM'
+    Task_startDate = '07/30/2018 08:39 PM'
+    Task_endDate = '08/01/2018 07:39 PM'
+
+}
+
+stages {
+
+    stage('Start'){
+        agent none
+        steps {
+            script {
+                resumeint()
+                echo: 'setup resumeint'
+            }
+        }
+    }
+
+    stage('Checkout'){
+        agent { label 'Windows1'}
+        steps {
+            script {
+                // Checkout application code
+            checkout({$class: 'SubversionSVN', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations:[[credentialsId1: "${svncredentialId}", depthOption: 'infinity', ignoreExternalsOption: true, local: 'application_name', remote: "${svncheckoutURL1}", travRepo: 'http://scm.prodlb.travp.net']], workspaceUpdater: [$class: 'updateUpdater']})
+
+            // Checkout UCD client tool
+            checkout({$class: 'SubversionSVN', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations:[[credentialsId1: "${svncredentialId}", depthOption: 'infinity', ignoreExternalsOption: true, local: 'udclient', remote: "${svncheckoutURL4}", travRepo: 'http://scm.prodlb.travp.net']], workspaceUpdater: [$class: 'updateUpdater']})
+
+            // checkout test script
+            checkout({$class: 'SubversionSVN', additionalCredentials: [], excludedCommitMessages: '', excludedRegions: '', excludedRevprop: '', excludedUsers: '', filterChangelog: false, ignoreDirPropChanges: false, includedRegions: '', locations:[[credentialsId1: "${svncredentialId}", depthOption: 'infinity', ignoreExternalsOption: true, local: 'regressiontest', remote: "${svncheckoutURL3}", travRepo: 'http://scm.prodlb.travp.net']], workspaceUpdater: [$class: 'updateUpdater']})
+
+            // Getting Revision Number from SVN
+            getsvnrevisionnumber()
+
+            // Getting dev and st deployment options form userinput.json file
+            getsvnrevisionnumber()
+
+            // Getting dev and st deployment options from userinput.json file
+            def userinputs = readJSON file: 'applicationName/userinput.json'
+            env.deploy_to_dev = "${userinputs.deploy_to_dev}"
+            env.deploy_to_st = "${userinputs.deploy_to_st}"
+            env.dev_notify_recipients = "${userinputs.dev_notify_recipients}"
+            env.st_notif_recipients = "${userinputs.st_notify_recipients}"
+        }
+    }       
+    post {
+        failure {
+            devnotifyFailed('Checkout', 'SVN CHECKOUT FAILURE')
+            }
+        }
+    }
+
+    stage('Build'){
+        tools{
+            maven 'Maven 3.3.3'
+            jdk "JDK 1.8.0_60_Windows"
+        }
+
+        agent { label 'Windows1' }
+        when { environment name: 'resumeintdeployment', value: 'false'}
+        steps {
+            script{
+                // The first milestone step starts tracking concurrent build order
+                milestone 1
+                bat "mvn -f ${pomfilepath} ${mavengoalsandoptions} ${navenopts} ${mavensettings} ${mavenglobalsettings} ${jacocogoals}"
+                echo 'Successful Build in DEV'
+            }
+        }
+
+        post{
+            success{
+                script{
+                    // if success then archive the artifact
+                    archiveArtifacts artifacts: "applicationName/**/*", caseSensitive: true, defaultExcludes: false, fingerprint: true
+                    env.Build_Status = '<td class="tg-b383">COMPLETED</td>'
+                    echo "testing skipped build"
+                }
+            }
+            failure{
+                devnotifyFailed('BUILD', 'BUILD FAILURE')
+            }
+        }
+    }
+
+    stage('Unit Testing'){
+        agent { label 'Windows1'}
+        when { environment name: 'resumeintdeployment', value: 'false'}
+        steps{
+            milestone 2
+            // publish junit report
+            junit "${junitreportpath}/**/*.xml"
+            echo: "Success: jUnit Testing Completed"
+        }
+        post {
+            success{
+                script {
+                    env.jUnit_Status = '<td class="tg-b383">COMPLETED</td>'
+                }
+                failure {
+                    devnotifyFailed('Unit Testing', 'UNIT TEST GATE FAILURE')
+                }
+            }
+        }
+
+        stage('Jacoco- Code Coverage') {
+            tools {
+                maven 'Maven 3.3.3'
+                jdk "JDK 1.8.0_60_Windows"
+            }
+        }
+
+        agent { label 'Windows1' }            
+        when { environment name: 'resumeintdeployment', value: 'false'}
+        steps {
+            // run jacoco and set threshold
+            script {
+                milestone 3
+                jacoco changeBuildStatus: true, clasPattern: 'applicationName/target/classes', exclusionPatterns: '**/test/*,**/domain/*', execPattern: '**/*.exec', maximumBranchCoverage: '60', maximumClassCoverage: '60', maximumComplexityCoverage: '55', maximumInstructionCoverage: '70', maximumLineCoverage: '70', maximumMethodCoverage: '70', minimumBranchCoverage: '0', minimumClassCoverage: '0', minimumComplexityCoverage: '0', minimumInstructionCoverage: '0', minimumLineCoverage: '0', minimumMethodCoverage: '0', sourcePattern: 'applicationName/src/main/java'
+                echo "Success: Jacoco Completed"
+            }
+        }
+        post{
+            success {
+                script{
+                    env.CodeCoverage Status = '<td class="tg-b383">COMPLETED</td>'
+                }
+                failure{
+                    devnotifyFailed('Code Coverage', 'Code Coverage FAILURE')
+                }
+            }
+        }
+
+        stage('SonarQube'){
+            tools{
+                maven 'Maven 3.3.3'
+                jdk "JDK 1.8.0_60_Windows"
+            }
+
+            agent {
+                label 'Windows'
+            }
+
+            when { environment name: 'resumeintdeployment', value: 'false'}
+
+            steps{
+                script{
+                    milestone 4
+                    // run SonarQube together with pushing jacoco and junit results
+                    scannerHome = tool 'Java_SonarQubeScanner.2.8'
+                    withSonarQubeEnv('lsrmbac_sonarQube6.7'){
+                        bat "${scannerHome}/bin/sonar-scanner -Dproject.settings=${sonarprojectsettings}"
+                        echo "Success: Code Quality Completed"
+                    }
+                    echo "Success: Code Quality Completed"
+                    // wait for sonarqube scan to finish and check whether it's successful and implimented the threshold
+                    sleep 30
+                    def qualitygate = waitForQualityGate()
+                    if(qualitygate.status != "OK"){
+                        error "Pipeline aborted due to quality gate coverage failure: ${qualitygate.status}"
+                    }
+                }
+            }
+            post{
+                sucess {
+                    script{
+                        env.StaticAnalysis_Status = '<td class="tg-b383">COMPLETED</td>'
+                    }
+                }
+                failure {
+                    devnotifyFailed('Static Anaysis', 'Static Anaysis FAILURE')
+                }
+            }
+        }
+
+        stage('Deploy to Dev'){
+            agent {
+                label 'Windows1'
+            }
+
+            when {
+                 allOf{ 
+                environment name: 'deploy_to_dev', value: 'enable'; environment name: 'resumeintdeployment', value: 'false'
+                }
+            }
+
+            steps{
+                script{
+                    milestone 5
+                    // capture current deployed version before deployment- needed for fallback feature
+                    getucddeployedversion('CFNS_DEV')
+                    env.devucdversion = "${env.ucdversiondeployed}"
+                    // Call deploy downstream job
+                    deploypublishversion('CFNS_DEV')
+                    echo "Success: Deployment to Dev"
+                }
+            }
+            post{
+                sucess {
+                    script{
+                        env.DevDeploy_Status = '<td class="tg-b383">COMPLETED</td>'
+                    }
+                }
+                failure {
+                    devnotifyFailed('DEPLOY TO DEV', 'DEPLOY TO DEV FAILURE')
+                }
+            }
+        }
+
+        stage('Smoke Test - Dev') {
+            tools {
+                ant 'Ant_1.9.7'
+                jdk "JAVA_1.8_121_Windows"
+            }
+
+            agent {
+                label 'Windows1'
+            }
+
+            environment {
+                TEST_SUITE = 'Smoke'
+                ENV = 'DEV'
+                PARALLEL_COUNT = '1'
+                BROWSER = 'Chrome'
+                APPLICATION = 'applicationName'
+            }
+
+            when {
+                 allOf{ 
+                environment name: 'deploy_to_dev', value: 'enable'; environment name: 'resumeintdeployment', value: 'false'
+                }
+            }
+
+            steps{
+                script{
+                    milestone 6
+                    bat "ant -file=regressiontest/Config/build.xml"
+                    def executionsummaryresult = readFile "regressiontest\\TetsResults\\applicationName\\Build_No_${BUILD_NUMBER}_Smoke_DEV\\SummaryReport.html"
+
+                    if (executionsummaryresult.comtains("No-Go")) {
+                        nogosmoketesting('DEV', "{env.dev_notif_recipients}", "${dev_fallbackdeploy_approvers}")
+                    }
+                    echo "Success: Smoke Test - DEV"
+                }
+            }
+
+            post{
+                // always send the summary report to user email and publish the report
+                always{
+                    summaryreportnotification('DEV', 'Smoke', "${notification_recipients}")
+                }
+                sucess {
+                    script{
+                        env.DevSmoke_Status = '<td class="tg-b383">COMPLETED</td>'
+                    }
+                }
+                failure {
+                    devnotifyFailed('SMOKE TEST IN DEV', 'SMOKE TEST IN DEV FAILURE')
+                }
+            }
+        }
+    }
+}
